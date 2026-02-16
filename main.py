@@ -1,5 +1,4 @@
-from re import PatternError
-from typing import List
+from typing import Dict, List, Tuple
 
 import astropy.units as u
 import camb
@@ -11,29 +10,83 @@ import pysm3
 
 matplotlib.use("qtAgg")
 
-NSIDE = 64
-FG_MODELS = ["s1", "d1"]
+# Configuration
+NSIDE = 256
 LMAX = 3 * NSIDE - 1
+FG_MODELS = ["s1", "d1"]
 
-# Planck 2018 best-fit parameters (TT,TE,EE+lowE+lensing)
-# Reference: Planck Collaboration 2018, Table 2 (last column)
-# https://arxiv.org/abs/1807.06209
+# Frequency channels (GHz) and sensitivities (μK·arcmin)
+# Based on typical CMB experiment specifications
+FREQ_CONFIGS = [
+    {"freq": 40, "sens": 122.723, "beam_fwhm": 53.4},
+    {"freq": 61, "sens": 28.572, "beam_fwhm": 37.8},
+    {"freq": 50, "sens": 43.878, "beam_fwhm": 42.5},
+    {"freq": 77, "sens": 11.707, "beam_fwhm": 29.9},
+    {"freq": 94, "sens": 7.019, "beam_fwhm": 22.6},
+    {"freq": 145, "sens": 5.198, "beam_fwhm": 15.6},
+    {"freq": 118, "sens": 4.576, "beam_fwhm": 18.5},
+    {"freq": 182, "sens": 5.176, "beam_fwhm": 13.1},
+    {"freq": 217, "sens": 12.365, "beam_fwhm": 10.3},
+    {"freq": 334, "sens": 29.613, "beam_fwhm": 7.6},
+    {"freq": 280, "sens": 16.105, "beam_fwhm": 8},
+    {"freq": 402, "sens": 134.075, "beam_fwhm": 6.3},
+]
+
+# Planck 2018 cosmological parameters
 COSMIC_PARAMS = {
-    "H0": 67.36,  # Hubble constant at z=0 in km/s/Mpc
-    "ombh2": 0.02237,  # Physical baryon density parameter
-    "omch2": 0.1200,  # Physical cold dark matter density parameter
-    "tau": 0.0544,  # Reionization optical depth
-    "As": 2.100e-9,  # Amplitude of the primordial curvature perturbations
-    "ns": 0.9649,  # Spectral index of the primordial power spectrum
+    "H0": 67.36,
+    "ombh2": 0.02237,
+    "omch2": 0.1200,
+    "tau": 0.0544,
+    "As": 2.100e-9,
+    "ns": 0.9649,
+    "mnu": 0.06,
+    "omk": 0.0,
 }
 
 
-def simulate_cmb(nside: int, cosmic_params: dict) -> np.ndarray:
+def downgrade_map(
+    input_map: np.ndarray, input_nside: int, target_nside: int
+) -> np.ndarray:
     """
-    Simulate a CMB map using the CAMB library + Healpy based on the provided cosmological parameters.
+    Correctly downgrade HEALPix map using harmonic space method.
+    Handles both single maps and polarized [T, Q, U] maps.
+    """
+    lmax_in = 3 * input_nside - 1
+    lmax_out = 3 * target_nside - 1
 
-    Returns a CMB healpy map in microkelvin (muK) units.
+    # Check if polarized (3, npix) or single map (npix,)
+    if input_map.ndim == 2 and input_map.shape[0] == 3:
+        # Polarized: convert to alm_T, alm_E, alm_B
+        alm_T, alm_E, alm_B = hp.map2alm(input_map, lmax=lmax_in, iter=3)
+        downgraded_map = hp.alm2map(
+            [alm_T, alm_E, alm_B], nside=target_nside, lmax=lmax_out, verbose=False
+        )
+    else:
+        # Single map
+        alm = hp.map2alm(input_map, lmax=lmax_in, iter=3)
+        downgraded_map = hp.alm2map(
+            alm, nside=target_nside, lmax=lmax_out, verbose=False
+        )
+
+    return downgraded_map
+
+
+def simulate_cmb(
+    nside: int, cosmic_params: dict, lmax: int | None = None, seed: int | None = None
+) -> np.ndarray:
     """
+    Simulate CMB map using CAMB + HEALPy.
+
+    Returns:
+        Array of shape (3, npix) containing [T, Q, U] maps in μK
+    """
+    if seed is not None:
+        np.random.seed(seed)
+
+    if lmax is None:
+        lmax = 3 * nside - 1
+
     pars = camb.set_params(
         H0=cosmic_params["H0"],
         ombh2=cosmic_params["ombh2"],
@@ -41,55 +94,455 @@ def simulate_cmb(nside: int, cosmic_params: dict) -> np.ndarray:
         tau=cosmic_params["tau"],
         As=cosmic_params["As"],
         ns=cosmic_params["ns"],
+        mnu=cosmic_params.get("mnu", 0.06),
+        omk=cosmic_params.get("omk", 0.0),
+        lmax=lmax,
     )
+
     results = camb.get_results(pars)
     powers = results.get_cmb_power_spectra(pars, CMB_unit="muK")
 
-    cls = powers["total"]
-    TT, EE, BB, TE = cls[:, 0], cls[:, 1], cls[:, 2], cls[:, 3]
+    total = powers["total"]
+    cls = [total[:, 0], total[:, 1], total[:, 2], total[:, 3]]  # TT, EE, BB, TE
 
-    return hp.synfast([TT, EE, BB, TE], nside=nside, lmax=LMAX, pol=True, new=True)
+    maps = hp.synfast(cls, nside=nside, lmax=lmax, pol=True, new=True, verbose=False)
+    return np.array(maps)  # Shape: (3, npix)
 
 
-def simulate_foreground(
-    nside: int, freqs: u.Quantity[u.GHz], fg_models: List[str], output_unit
+def simulate_foreground_single_freq(
+    nside: int, freq_ghz: float, fg_models: List[str]
 ) -> np.ndarray:
     """
-    Simulate a foreground map using the PySM3 library based on the provided foreground models.
+    Simulate foreground map at a single frequency using PySM3.
 
-    Returns a foreground healpy map in microkelvin (muK) units.
+    Returns:
+        Array of shape (3, npix) containing [I, Q, U] maps in μK_CMB
     """
-
-    fg = pysm3.Sky(nside=nside, preset_strings=fg_models, output_unit=output_unit)
-    emissions = fg.get_emission(freqs)
-
-    # Construct a healpy map with the same shape as the CMB map (nside, 3 pol components)
-    fg_map = np.zeros((3, hp.nside2npix(nside)))
-    fg_map[0] = emissions[0]  # Intensity (I)
-    fg_map[1] = emissions[1]  # Q polarization
-    fg_map[2] = emissions[2]  # U polarization
-    return fg_map
+    fg = pysm3.Sky(nside=nside, preset_strings=fg_models, output_unit="uK_CMB")
+    emissions = fg.get_emission(freq_ghz * u.GHz)
+    return emissions.value  # Shape: (3, npix)
 
 
-def simulate_noise(): ...
+def generate_white_noise(
+    nside: int,
+    sensitivities: float | List[float],
+    is_half_split: bool = False,
+    polarized: bool = True,
+    seed: int | None = None,
+) -> np.ndarray:
+    """
+    Generate white noise maps.
+
+    Returns:
+        For single frequency: (3, npix) if polarized, (npix,) otherwise
+        For multiple frequencies: (n_freq, 3, npix) if polarized
+    """
+    if seed is not None:
+        np.random.seed(seed)
+
+    sensitivities = np.atleast_1d(sensitivities)
+    n_freq = len(sensitivities)
+    npix = hp.nside2npix(nside)
+
+    # Pixel area in arcmin²
+    pix_amin2 = (4.0 * np.pi / npix) * (180.0 * 60.0 / np.pi) ** 2
+
+    # Noise per pixel
+    sigma_pix_I = np.sqrt(sensitivities**2 / pix_amin2)
+
+    if is_half_split:
+        sigma_pix_I *= np.sqrt(2.0)
+
+    if polarized:
+        noise = np.random.randn(n_freq, 3, npix)
+        noise *= sigma_pix_I[:, None, None]
+    else:
+        noise = np.random.randn(n_freq, npix)
+        noise *= sigma_pix_I[:, None]
+
+    return noise.squeeze()
+
+
+def apply_beam_smoothing(map_in: np.ndarray, beam_fwhm_arcmin: float) -> np.ndarray:
+    """
+    Apply Gaussian beam smoothing to map(s).
+
+    Parameters:
+        map_in: Shape (3, npix) for [T, Q, U] or (npix,) for single map
+        beam_fwhm_arcmin: Beam FWHM in arcminutes
+
+    Returns:
+        Smoothed map with same shape as input
+    """
+    beam_fwhm_rad = np.radians(beam_fwhm_arcmin / 60.0)
+
+    if map_in.ndim == 2 and map_in.shape[0] == 3:
+        # Polarized maps
+        smoothed = np.zeros_like(map_in)
+        for i in range(3):
+            smoothed[i] = hp.smoothing(map_in[i], fwhm=beam_fwhm_rad, verbose=False)
+    else:
+        # Single map
+        smoothed = hp.smoothing(map_in, fwhm=beam_fwhm_rad, verbose=False)
+
+    return smoothed
+
+
+def simulate_full_sky(
+    nside: int,
+    lmax: int,
+    cosmic_params: dict,
+    freq_configs: List[Dict],
+    fg_models: List[str],
+    apply_beam: bool = True,
+    cmb_seed: int = 42,
+    noise_seed: int = 123,
+) -> Dict[int, Dict[str, np.ndarray]]:
+    """
+    Simulate full sky maps (CMB + foregrounds + noise) for multiple frequencies.
+
+    Returns:
+        Dictionary mapping frequency (GHz) to dict containing:
+            'cmb': CMB maps [T, Q, U]
+            'foreground': Foreground maps [I, Q, U]
+            'noise': Noise maps [T, Q, U]
+            'total': Total maps [T, Q, U]
+            'beam_fwhm': Beam FWHM in arcmin
+            'sensitivity': Noise sensitivity in μK·arcmin
+    """
+    print(f"\n{'=' * 70}")
+    print(f"FULL SKY SIMULATION")
+    print(f"{'=' * 70}")
+    print(f"NSIDE = {nside}, LMAX = {lmax}")
+    print(f"Number of frequencies: {len(freq_configs)}")
+    print(f"Foreground models: {fg_models}")
+    print(f"Apply beam smoothing: {apply_beam}")
+
+    # Generate CMB once (frequency-independent)
+    print(f"\n1. Generating CMB map (seed={cmb_seed})...")
+    cmb_map = simulate_cmb(nside, cosmic_params, lmax, seed=cmb_seed)
+    print(f"   CMB T RMS: {np.std(cmb_map[0]):.2f} μK")
+
+    # Process each frequency
+    results = {}
+
+    for i, config in enumerate(freq_configs):
+        freq = config["freq"]
+        sens = config["sens"]
+        beam = config.get("beam_fwhm", 10.0)
+
+        print(
+            f"\n{i + 1}. Processing {freq} GHz (sens={sens:.2f} μK·arcmin, beam={beam:.1f}')"
+        )
+
+        # CMB (same for all frequencies)
+        cmb_freq = cmb_map.copy()
+
+        # Foreground (frequency-dependent)
+        print(f"   Generating foreground...")
+        fg_freq = simulate_foreground_single_freq(nside, freq, fg_models)
+        print(f"   FG I RMS: {np.std(fg_freq[0]):.2f} μK")
+
+        # Noise (frequency-dependent)
+        print(f"   Generating noise (seed={noise_seed + i})...")
+        noise_freq = generate_white_noise(
+            nside, sens, polarized=True, seed=noise_seed + i
+        )
+        print(f"   Noise T RMS: {np.std(noise_freq[0]):.2f} μK")
+
+        # Combine
+        total_freq = cmb_freq + fg_freq + noise_freq
+
+        # Apply beam smoothing
+        if apply_beam:
+            print(f"   Applying beam smoothing (FWHM={beam:.1f}')...")
+            total_freq = apply_beam_smoothing(total_freq, beam)
+
+        print(f"   Total T RMS: {np.std(total_freq[0]):.2f} μK")
+
+        # Store results
+        results[freq] = {
+            "cmb": cmb_freq,
+            "foreground": fg_freq,
+            "noise": noise_freq,
+            "total": total_freq,
+            "beam_fwhm": beam,
+            "sensitivity": sens,
+        }
+
+    print(f"\n{'=' * 70}")
+    print(f"✓ Simulation complete for {len(results)} frequencies")
+    print(f"{'=' * 70}\n")
+
+    return results
+
+
+def plot_component_comparison(
+    results: Dict, freq: int, nside: int, lmax: int, save_prefix: str = ""
+):
+    """
+    Plot comparison of CMB, foreground, noise, and total maps for a single frequency.
+    """
+    data = results[freq]
+
+    fig = plt.figure(figsize=(16, 12))
+
+    # Extract T maps
+    cmb_T = data["cmb"][0]
+    fg_T = data["foreground"][0]
+    noise_T = data["noise"][0]
+    total_T = data["total"][0]
+
+    # Plot maps
+    vmin, vmax = -300, 300
+
+    hp.mollview(
+        cmb_T,
+        title=f"CMB Temperature ({freq} GHz)",
+        sub=(3, 3, 1),
+        cmap="RdBu_r",
+        min=vmin,
+        max=vmax,
+        unit="μK",
+        hold=True,
+    )
+
+    hp.mollview(
+        fg_T,
+        title=f"Foreground ({freq} GHz)",
+        sub=(3, 3, 2),
+        cmap="viridis",
+        unit="μK",
+        hold=True,
+    )
+
+    hp.mollview(
+        noise_T,
+        title=f"Noise ({freq} GHz, {data['sensitivity']:.1f} μK·arcmin)",
+        sub=(3, 3, 3),
+        cmap="gray",
+        unit="μK",
+        hold=True,
+    )
+
+    hp.mollview(
+        total_T,
+        title=f"Total Map ({freq} GHz)",
+        sub=(3, 3, 4),
+        cmap="RdBu_r",
+        min=vmin,
+        max=vmax,
+        unit="μK",
+        hold=True,
+    )
+
+    # Q polarization
+    hp.mollview(
+        data["total"][1],
+        title=f"Q Polarization ({freq} GHz)",
+        sub=(3, 3, 5),
+        cmap="RdBu_r",
+        unit="μK",
+        hold=True,
+    )
+
+    # U polarization
+    hp.mollview(
+        data["total"][2],
+        title=f"U Polarization ({freq} GHz)",
+        sub=(3, 3, 6),
+        cmap="RdBu_r",
+        unit="μK",
+        hold=True,
+    )
+
+    # Power spectra
+    plt.subplot(3, 3, 7)
+
+    # Compute power spectra
+    cl_cmb = hp.anafast(data["cmb"], lmax=lmax)[2]  # BB
+    cl_fg = hp.anafast(data["foreground"], lmax=lmax)[0]
+    cl_total = hp.anafast(data["total"], lmax=lmax)[0]
+
+    ell = np.arange(len(cl_cmb))
+    dl_cmb = cl_cmb * ell * (ell + 1) / (2 * np.pi)
+    dl_fg = cl_fg * ell * (ell + 1) / (2 * np.pi)
+    dl_total = cl_total * ell * (ell + 1) / (2 * np.pi)
+
+    plt.semilogy(ell[2:], dl_cmb[2:], label="CMB", linewidth=2)
+    plt.semilogy(ell[2:], dl_fg[2:], label="Foreground", linewidth=2)
+    plt.semilogy(ell[2:], dl_total[2:], label="Total", linewidth=2, alpha=0.7)
+
+    plt.xlabel(r"Multipole $\ell$", fontsize=12)
+    plt.ylabel(r"$D_\ell$ [$\mu K^2$]", fontsize=12)
+    plt.title(f"BB Power Spectrum ({freq} GHz)", fontsize=12)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    # Histogram
+    plt.subplot(3, 3, 8)
+    plt.hist(cmb_T, bins=100, alpha=0.5, label="CMB", density=True)
+    plt.hist(total_T, bins=100, alpha=0.5, label="Total", density=True)
+    plt.xlabel("Temperature [μK]", fontsize=12)
+    plt.ylabel("Probability Density", fontsize=12)
+    plt.title("Temperature Distribution", fontsize=12)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    # Statistics table
+    plt.subplot(3, 3, 9)
+    plt.axis("off")
+    stats_text = f"""
+    Simulation Statistics ({freq} GHz)
+    {"=" * 35}
+
+    NSIDE: {nside}
+    LMAX: {lmax}
+    Beam FWHM: {data["beam_fwhm"]:.1f} arcmin
+    Sensitivity: {data["sensitivity"]:.2f} μK·arcmin
+
+    RMS Values:
+    CMB T:        {np.std(cmb_T):8.2f} μK
+    Foreground:   {np.std(fg_T):8.2f} μK
+    Noise:        {np.std(noise_T):8.2f} μK
+    Total:        {np.std(total_T):8.2f} μK
+
+    CMB Q:        {np.std(data["cmb"][1]):8.2f} μK
+    CMB U:        {np.std(data["cmb"][2]):8.2f} μK
+    """
+    plt.text(
+        0.1,
+        0.5,
+        stats_text,
+        fontsize=10,
+        family="monospace",
+        verticalalignment="center",
+    )
+
+    plt.tight_layout()
+
+    if save_prefix:
+        filename = f"{save_prefix}_freq{freq}GHz.png"
+        plt.savefig(filename, dpi=150, bbox_inches="tight")
+        print(f"Saved: {filename}")
+
+
+def plot_frequency_comparison(
+    results: Dict, nside: int, lmax: int, save_name: str = ""
+):
+    """
+    Plot comparison across different frequencies.
+    """
+    freqs = sorted(results.keys())
+    n_freq = len(freqs)
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    # Power spectra comparison
+    ax = axes[0, 0]
+    for freq in freqs:
+        cl = hp.anafast(results[freq]["total"], lmax=lmax)[0]
+        ell = np.arange(len(cl))
+        dl = cl * ell * (ell + 1) / (2 * np.pi)
+        ax.semilogy(ell[2:], dl[2:], label=f"{freq} GHz", alpha=0.7)
+
+    ax.set_xlabel(r"Multipole $\ell$", fontsize=12)
+    ax.set_ylabel(r"$D_\ell$ [$\mu K^2$]", fontsize=12)
+    ax.set_title("BB Power Spectra (All Frequencies)", fontsize=13)
+    ax.legend(ncol=2, fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+    # RMS vs Frequency
+    ax = axes[0, 1]
+    cmb_rms = [np.std(results[f]["cmb"][0]) for f in freqs]
+    fg_rms = [np.std(results[f]["foreground"][0]) for f in freqs]
+    noise_rms = [np.std(results[f]["noise"][0]) for f in freqs]
+    total_rms = [np.std(results[f]["total"][0]) for f in freqs]
+
+    ax.plot(freqs, cmb_rms, "o-", label="CMB", linewidth=2)
+    ax.plot(freqs, fg_rms, "s-", label="Foreground", linewidth=2)
+    ax.plot(freqs, noise_rms, "^-", label="Noise", linewidth=2)
+    ax.plot(freqs, total_rms, "d-", label="Total", linewidth=2)
+
+    ax.set_xlabel("Frequency [GHz]", fontsize=12)
+    ax.set_ylabel("RMS [μK]", fontsize=12)
+    ax.set_title("RMS vs Frequency", fontsize=13)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.set_yscale("log")
+
+    # Sensitivity vs Frequency
+    ax = axes[1, 0]
+    sensitivities = [results[f]["sensitivity"] for f in freqs]
+    ax.semilogy(freqs, sensitivities, "o-", linewidth=2, markersize=8)
+    ax.set_xlabel("Frequency [GHz]", fontsize=12)
+    ax.set_ylabel("Sensitivity [μK·arcmin]", fontsize=12)
+    ax.set_title("Instrument Sensitivity", fontsize=13)
+    ax.grid(True, alpha=0.3)
+
+    # Beam FWHM vs Frequency
+    ax = axes[1, 1]
+    beams = [results[f]["beam_fwhm"] for f in freqs]
+    ax.plot(freqs, beams, "o-", linewidth=2, markersize=8, color="orange")
+    ax.set_xlabel("Frequency [GHz]", fontsize=12)
+    ax.set_ylabel("Beam FWHM [arcmin]", fontsize=12)
+    ax.set_title("Beam Size", fontsize=13)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_name:
+        plt.savefig(save_name, dpi=150, bbox_inches="tight")
+        print(f"Saved: {save_name}")
+
+
+def save_maps(results: Dict, output_dir: str = "."):
+    """
+    Save all simulated maps to FITS files.
+    """
+    import os
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    for freq, data in results.items():
+        # Save individual components
+        hp.write_map(
+            f"{output_dir}/cmb_freq{freq}GHz.fits", data["cmb"], overwrite=True
+        )
+        hp.write_map(
+            f"{output_dir}/foreground_freq{freq}GHz.fits",
+            data["foreground"],
+            overwrite=True,
+        )
+        hp.write_map(
+            f"{output_dir}/noise_freq{freq}GHz.fits", data["noise"], overwrite=True
+        )
+        hp.write_map(
+            f"{output_dir}/total_freq{freq}GHz.fits", data["total"], overwrite=True
+        )
+
+    print(f"\n✓ Saved all maps to {output_dir}/")
 
 
 if __name__ == "__main__":
-    cmb_map = simulate_cmb(NSIDE, COSMIC_PARAMS)
-    fg_map = simulate_foreground(NSIDE, 150 * u.GHz, FG_MODELS, output_unit="uK_CMB")
+    # Run full simulation
+    results = simulate_full_sky(
+        nside=NSIDE,
+        lmax=LMAX,
+        cosmic_params=COSMIC_PARAMS,
+        freq_configs=FREQ_CONFIGS,
+        fg_models=FG_MODELS,
+        apply_beam=True,
+        cmb_seed=42,
+        noise_seed=123,
+    )
 
-    # Add the CMB and foreground maps together
-    total_map = cmb_map + fg_map
+    # Plot comparison across all frequencies
+    plot_frequency_comparison(
+        results, nside=NSIDE, lmax=LMAX, save_name="simulation_multifreq.png"
+    )
 
-    hp.mollview(
-        total_map[0], title="Simulated CMB + Foreground Intensity (I)", unit="uK"
-    )
-    hp.mollview(
-        total_map[1], title="Simulated CMB + Foreground Q Polarization", unit="uK"
-    )
-    hp.mollview(
-        total_map[2], title="Simulated CMB + Foreground U Polarization", unit="uK"
-    )
+    # Save all maps
+    # save_maps(results, output_dir="simulated_maps")
 
     plt.show()
-    noise_map = simulate_noise()
