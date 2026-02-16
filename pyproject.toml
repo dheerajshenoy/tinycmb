@@ -1,0 +1,14 @@
+[project]
+name = "tinycmb"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "astropy>=7.2.0",
+    "camb>=1.6.5",
+    "healpy>=1.19.0",
+    "matplotlib>=3.10.8",
+    "pyqt6>=6.10.2",
+    "pysm3>=3.4.3",
+]
