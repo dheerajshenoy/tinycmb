@@ -42,14 +42,14 @@ def downgrade_map(
         # Polarized: convert to alm_T, alm_E, alm_B
         alm_T, alm_E, alm_B = hp.map2alm(input_map, lmax=lmax_in, iter=3)
         downgraded_map = hp.alm2map(
-            [alm_T, alm_E, alm_B], nside=target_nside, lmax=lmax_out, verbose=False
+            [alm_T, alm_E, alm_B],
+            nside=target_nside,
+            lmax=lmax_out,
         )
     else:
         # Single map
         alm = hp.map2alm(input_map, lmax=lmax_in, iter=3)
-        downgraded_map = hp.alm2map(
-            alm, nside=target_nside, lmax=lmax_out, verbose=False
-        )
+        downgraded_map = hp.alm2map(alm, nside=target_nside, lmax=lmax_out)
 
     return downgraded_map
 
@@ -82,12 +82,12 @@ def simulate_cmb(
     )
 
     results = camb.get_results(pars)
-    powers = results.get_cmb_power_spectra(pars, CMB_unit="muK")
+    powers = results.get_cmb_power_spectra(pars, lmax=lmax, CMB_unit="muK", raw_cl=True)
 
     total = powers["total"]
     cls = [total[:, 0], total[:, 1], total[:, 2], total[:, 3]]  # TT, EE, BB, TE
 
-    maps = hp.synfast(cls, nside=nside, lmax=lmax, pol=True, new=True, verbose=False)
+    maps = hp.synfast(cls, nside=nside, lmax=lmax, pol=True, new=True)
     return np.array(maps)  # Shape: (3, npix)
 
 
@@ -162,10 +162,10 @@ def apply_beam_smoothing(map_in: np.ndarray, beam_fwhm_arcmin: float) -> np.ndar
         # Polarized maps
         smoothed = np.zeros_like(map_in)
         for i in range(3):
-            smoothed[i] = hp.smoothing(map_in[i], fwhm=beam_fwhm_rad, verbose=False)
+            smoothed[i] = hp.smoothing(map_in[i], fwhm=beam_fwhm_rad)
     else:
         # Single map
-        smoothed = hp.smoothing(map_in, fwhm=beam_fwhm_rad, verbose=False)
+        smoothed = hp.smoothing(map_in, fwhm=beam_fwhm_rad)
 
     return smoothed
 
@@ -380,3 +380,4 @@ def quick_sim(
     total = apply_beam_smoothing(total, beam_fwhm)
 
     return total
+
