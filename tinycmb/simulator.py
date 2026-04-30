@@ -26,11 +26,28 @@ class Config:
     cosmo_params: CosmoConfig
     freqs: np.ndarray
     sens: np.ndarray
-    beam_arcmin: float
+    beam_arcmin: float | np.ndarray
     spectra_type: str
     output_unit: str
     extra_smoothing_fwhm_arcmin: float
     add_noise: bool
+    mask: str | None
+    """
+    nside_out: HEALPix nside for output maps (e.g., 64)
+    nside_cmb: HEALPix nside for CMB simulation (e.g., 512)
+    nside_fg: HEALPix nside for foreground simulation (e.g., 512)
+    fg_models: List of foreground model preset strings for PySM3 (e.g., ["s5", "d10", "a2"])
+    lmax: Maximum multipole for CMB power spectra (if None, defaults to 3*nside_out-1)
+    cosmo_params: Cosmological parameters for CAMB
+    freqs: Array of frequency channels in GHz (e.g., [50, 78, 100, 119, 140, 166, 195, 235, 280, 337])
+    sens: Array of noise sensitivities in uK-arcmin for each frequency channel (e.g., [32.78, 18.59, 12.93, 9.79, 9.55, 5.81, 7.12, 15.16, 17.98, 24.99])
+    beam_arcmin: Beam FWHM in arcminutes for Gaussian smoothing (can be a single float or an array of length n_freq)
+    spectra_type: Type of CAMB power spectra to use (e.g., "total", "unlensed_scalar", "lensed_scalar", "tensor")
+    output_unit: Unit for output maps (e.g., "uK_CMB")
+    extra_smoothing_fwhm_arcmin: Additional Gaussian smoothing FWHM in arcminutes to apply to maps (e.g., 0.0 for no extra smoothing)
+    add_noise: Whether to add noise to the simulated maps (True or False)
+    mask: File path to a HEALPix mask map (optional, can be None for no mask)
+    """
 
 class Simulator:
     def __init__(self, config):

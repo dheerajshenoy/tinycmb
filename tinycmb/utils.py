@@ -3,11 +3,50 @@ from typing import Optional
 import healpy as hp
 import matplotlib.pyplot as plt
 
+def downgrade_mask(mask, nside_out, threshold=0.9):
+    """
+    Downgrades a binary mask to a lower resolution while preserving
+    the masked/unmasked regions accurately.
+
+    Parameters
+    ----------
+    mask : np.ndarray
+        The input binary mask (1s for kept pixels, 0s for masked).
+    nside_out : int
+        The target NSIDE resolution.
+    threshold : float
+        The cutoff to determine if a new pixel is masked.
+        0.9 means if a pixel is >90% unmasked in the high-res map,
+        it stays unmasked (1) in the low-res map.
+
+    Returns
+    -------
+    np.ndarray
+        The downgraded binary mask (1s and 0s).
+    """
+    nside_in = hp.get_nside(mask)
+
+    if nside_out > nside_in:
+        raise ValueError(f"nside_out ({nside_out}) must be <= nside_in ({nside_in})")
+
+    if nside_out == nside_in:
+        return mask.copy()
+
+    # 1. Use ud_grade to average the pixel values
+    # This results in values between 0 and 1
+    downgraded_mask = hp.ud_grade(mask.astype(float), nside_out)
+
+    # 2. Re-binarize based on the threshold
+    # Logic: Only keep pixels that are mostly "clean" (1)
+    binary_mask = np.where(downgraded_mask >= threshold, 1.0, 0.0)
+
+    return binary_mask
+
 def downgrade_map_harmonic(
     maps: np.ndarray,
     nside_in: int,
     nside_out: int,
-    beam_fwhm_arcmin: Optional[np.ndarray] = None,
+    beam_fwhm_arcmin: Optional[np.ndarray] | float = None,
     extra_smoothing_fwhm_arcmin: Optional[float] = None,
     lmax_out: Optional[int] = None,
     iter: int = 0,

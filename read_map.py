@@ -1,6 +1,6 @@
 from tinycmb.utils import plot_cmb_spectra
 from tinycmb import Simulator, Config, CosmoConfig
-from tinycmb.utils import downgrade_map_harmonic
+from tinycmb.utils import downgrade_map_harmonic, downgrade_mask
 import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
@@ -37,38 +37,20 @@ config = Config(
 
 simulator = Simulator(config)
 
-cmb_maps = simulator.simulate_cmb()
-fg_maps = simulator.simulate_foregrounds()
+total_map = hp.read_map("total.fits", field=(0, 1, 2))
 
-cmb_maps_downgraded = downgrade_map_harmonic(
-        cmb_maps,
-        nside_in=config.nside_cmb,
-        nside_out=config.nside_out,
-        beam_fwhm_arcmin=config.beam_arcmin,
-        extra_smoothing_fwhm_arcmin=config.extra_smoothing_fwhm_arcmin,
-        lmax_out=config.lmax,
-        iter=0)
+mask = hp.read_map("HFI_Mask_GalPlane-apo2_2048_R2.00.fits", field=4).astype(bool)
 
+mask_downgraded = downgrade_mask(mask, nside_out=config.nside_out)
 
-fg_maps_downgraded = downgrade_map_harmonic(
-        fg_maps,
-        nside_in=config.nside_fg,
-        nside_out=config.nside_out,
-        beam_fwhm_arcmin=config.beam_arcmin,
-        extra_smoothing_fwhm_arcmin=2.5,
-        lmax_out=config.lmax,
-        iter=0)
+total_map_masked = hp.ma(total_map)
+total_map_masked.mask = np.logical_not(mask_downgraded)
 
-noise_maps = simulator.simulate_noise()
-
-total_maps = cmb_maps + fg_maps + noise_maps
-
-hp.write_map("total.fits", total_maps[0], overwrite=True)
-
-# hp.mollview(total_maps[0][0], title="Simulated CMB T", unit="muK", min=-300, max=300)
+# hp.mollview(total_map_masked.filled(), title="Simulated CMB T", unit="muK", min=-300, max=300)
 # plt.savefig("cmb_map.png", dpi=300)
 
-# plot_cmb_spectra((cmb_maps[0]), lmax=config.lmax, show=False, save="cmb_spectra.png", dpi=300)
+plot_cmb_spectra(total_map, lmax=config.lmax, save="cmb_spectra.png", dpi=300)
+plot_cmb_spectra(total_map_masked, lmax=config.lmax, save="cmb_spectra_masked.png", dpi=300)
 # plot_cmb_spectra((total_maps[0]), lmax=config.lmax, dpi=300)
 
 plt.show()
