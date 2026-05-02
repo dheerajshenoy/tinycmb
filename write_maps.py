@@ -4,6 +4,7 @@ from tinycmb.utils import downgrade_map_harmonic
 import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
+from enum import Enum
 
 cosmo_config = CosmoConfig(
         H0=67.5, ombh2=0.022, omch2=0.122,
@@ -32,11 +33,19 @@ config = Config(
         lmax = None,
         )
 
-seed = 42
+VERSION = "v1"
+# VERSION = "v2"
+noise_seed = {
+    "v1": 0,
+    "v2": 1
+}[VERSION]
+
+cmb_seed = 42
+fg_seed = 42
 
 simulator = Simulator(config)
-cmb_maps = simulator.simulate_cmb(seed)
-fg_maps = simulator.simulate_foregrounds(seed)
+cmb_maps = simulator.simulate_cmb(cmb_seed)
+fg_maps = simulator.simulate_foregrounds(fg_seed)
 
 cmb_maps = downgrade_map_harmonic(
         cmb_maps,
@@ -59,13 +68,12 @@ fg_maps = downgrade_map_harmonic(
 
 noise_maps = simulator.simulate_noise(noise_seed)
 
-prefix = "../polangle/outputs/sim_maps/64/v1/"
+prefix = f"../polangle/outputs/sim_maps/64/{VERSION}/"
 
-
-hp.write_map(f"cmb_{config.nside_out}_{seed}.fits", cmb_maps[0], overwrite=True)
+hp.write_map(f"cmb_{config.nside_out}_{cmb_seed}.fits", cmb_maps[0], overwrite=True)
 
 for i in range(noise_maps.shape[0]):
-    tag = f"{"_".join(config.fg_models)}_{str(config.freqs[i]).replace(".", "_")}GHz"
-    hp.write_map(f"foreground_{tag}_{seed}.fits", fg_maps[i], overwrite=True)
+    tag = f"{config.nside_out}_{"_".join(config.fg_models)}_{str(config.freqs[i]).replace(".", "_")}GHz"
+    hp.write_map(f"foreground_{tag}_{fg_seed}.fits", fg_maps[i], overwrite=True)
     hp.write_map(f"noise_{tag}_{noise_seed}.fits", noise_maps[i], overwrite=True)
-    hp.write_map(f"total_{tag}.fits", fg_maps[i], overwrite=True)
+    hp.write_map(f"total_{tag}_{cmb_seed}.fits", fg_maps[i], overwrite=True)

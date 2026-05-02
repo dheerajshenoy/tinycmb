@@ -121,7 +121,9 @@ class Simulator:
 
         return cmb_maps
 
-    def simulate_foregrounds(self):
+    def simulate_foregrounds(self, seed = None):
+        if seed is not None:
+            np.random.seed(seed)
         sky = pysm3.Sky(nside=self.config.nside_out, preset_strings=self.config.fg_models, output_unit=self.config.output_unit)
 
         n_freq = len(self.config.freqs)
@@ -139,7 +141,7 @@ class Simulator:
             return np.zeros((len(self.config.freqs), 3, hp.nside2npix(self.config.nside_out)), dtype=np.float32)
         else:
             if seed is not None:
-                np.seed(seed)
+                np.random.seed(seed)
             n_freq = len(self.config.freqs)
             extra_smoothing_fwhm = self.config.extra_smoothing_fwhm_arcmin
             if self.config.nside_out < self.config.nside_cmb:
