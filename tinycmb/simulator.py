@@ -22,7 +22,6 @@ class Config:
     nside_cmb: int
     nside_fg: int
     fg_models: List[str]
-    lmax: int | None
     cosmo_params: CosmoConfig
     freqs: np.ndarray
     sens: np.ndarray
@@ -31,7 +30,8 @@ class Config:
     output_unit: str
     extra_smoothing_fwhm_arcmin: float
     add_noise: bool
-    mask: str | None
+    mask: Optional[str] = None
+    lmax: Optional[int] = None
     """
     nside_out: HEALPix nside for output maps (e.g., 64)
     nside_cmb: HEALPix nside for CMB simulation (e.g., 512)
@@ -55,13 +55,16 @@ class Simulator:
         if self.config.lmax is None:
             self.config.lmax = 3 * self.config.nside_out - 1
 
-    def __simulate_single_cmb(self):
+    def __simulate_single_cmb(self, seed = None):
         """
         Generates a simulated CMB map based on the provided configuration.
 
         Returns:
             np.ndarray: Simulated CMB map in HEALPix format.
         """
+        if seed is not None:
+            np.random.seed(seed)
+
         cosparams = self.config.cosmo_params
         lmax = self.config.lmax
         # Set up CAMB parameters
@@ -106,8 +109,8 @@ class Simulator:
 
         return np.array(cmb_maps, dtype=np.float32)
 
-    def simulate_cmb(self):
-        cmb_single = self.__simulate_single_cmb()
+    def simulate_cmb(self, seed = None):
+        cmb_single = self.__simulate_single_cmb(seed)
 
         npix = hp.nside2npix(self.config.nside_out)
         n_freq = len(self.config.freqs)
@@ -143,10 +146,12 @@ class Simulator:
                 noise_out = self.__generate_noise_native_then_downgrade(
                         nside_cmb=self.config.nside_cmb,
                         nside_out=self.config.nside_out,
+                        seed = seed,
                         )
             else:
                 noise_out = self.__generate_noise(
                         nside=self.config.nside_out,
+                        seed = seed,
                         )
 
             if self.config.extra_smoothing_fwhm_arcmin is not None and self.config.extra_smoothing_fwhm_arcmin > 0.0:

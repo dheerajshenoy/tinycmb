@@ -49,8 +49,8 @@ total_map_masked.mask = np.logical_not(mask_downgraded)
 # hp.mollview(total_map_masked.filled(), title="Simulated CMB T", unit="muK", min=-300, max=300)
 # plt.savefig("cmb_map.png", dpi=300)
 
-plot_cmb_spectra(total_map, lmax=config.lmax, save="cmb_spectra.png", dpi=300)
-plot_cmb_spectra(total_map_masked, lmax=config.lmax, save="cmb_spectra_masked.png", dpi=300)
+# plot_cmb_spectra(total_map, lmax=config.lmax, save="cmb_spectra.png", dpi=300)
+# plot_cmb_spectra(total_map_masked, lmax=config.lmax, save="cmb_spectra_masked.png", dpi=300)
 # plot_cmb_spectra((total_maps[0]), lmax=config.lmax, dpi=300)
 
 plt.show()
