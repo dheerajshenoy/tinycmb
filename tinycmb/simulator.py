@@ -131,10 +131,12 @@ class Simulator:
 
         return foregrounds
 
-    def simulate_noise(self):
+    def simulate_noise(self, seed = None):
         if self.config.add_noise is False:
             return np.zeros((len(self.config.freqs), 3, hp.nside2npix(self.config.nside_out)), dtype=np.float32)
         else:
+            if seed is not None:
+                np.seed(seed)
             n_freq = len(self.config.freqs)
             extra_smoothing_fwhm = self.config.extra_smoothing_fwhm_arcmin
             if self.config.nside_out < self.config.nside_cmb:
