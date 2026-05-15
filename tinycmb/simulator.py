@@ -66,7 +66,7 @@ class Simulator:
             np.random.seed(seed)
 
         cosparams = self.config.cosmo_params
-        lmax = self.config.lmax
+        lmax = 5000
         # Set up CAMB parameters
         pars = camb.CAMBparams()
         pars.set_cosmology(H0=cosparams.H0, ombh2=cosparams.ombh2, omch2=cosparams.omch2)
